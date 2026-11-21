@@ -3,6 +3,14 @@ cmake_minimum_required(VERSION 3.20)
 # Build with Rulebook (RLC) and disable CMake's default C and C++ build rules.
 project(KuhnPoker LANGUAGES NONE)
 
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR
+   NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+    message(FATAL_ERROR
+        "This project requires native Linux x86_64. "
+        "Detected ${CMAKE_SYSTEM_NAME}/${CMAKE_SYSTEM_PROCESSOR}. "
+        "Configure and build it on the Linux server with environment.yml.")
+endif()
+
 # Enable CTest.
 enable_testing()
 
@@ -12,7 +20,7 @@ enable_testing()
 # ==========================================================
 # Conda sets CONDA_PREFIX to the path of the active environment.
 if(NOT DEFINED ENV{CONDA_PREFIX})
-    message(FATAL_ERROR "Activate the rulebook environment first with conda activate rulebook")
+    message(FATAL_ERROR "Activate the environment first with conda activate rulebook_linux")
 endif()
 
 set(CONDA_BIN "$ENV{CONDA_PREFIX}/bin")
@@ -30,49 +38,65 @@ find_program(RLC_TEST NAMES rlc-test
 find_program(RLC_ACTION NAMES rlc-action
     PATHS "${CONDA_BIN}" NO_DEFAULT_PATH REQUIRED)
 
-# clang-22 is the LLVM 22 compiler and linker driver.
-find_program(CLANG NAMES clang-22
+# Prefer Conda's target driver, which selects its Linux sysroot and linker.
+find_program(CLANG NAMES x86_64-conda-linux-gnu-clang clang-22 clang
     PATHS "${CONDA_BIN}" NO_DEFAULT_PATH REQUIRED)
 
 # opt processes LLVM IR.
-find_program(LLVM_OPT NAMES opt
+find_program(LLVM_OPT NAMES opt-22 opt
     PATHS "${CONDA_BIN}" NO_DEFAULT_PATH REQUIRED)
 
 # llvm-symbolizer turns ASan error addresses into readable symbols.
-find_program(SYMBOLIZER NAMES llvm-symbolizer
+find_program(SYMBOLIZER NAMES llvm-symbolizer-22 llvm-symbolizer
     PATHS "${CONDA_BIN}" NO_DEFAULT_PATH REQUIRED)
 
-# libfuzzer.a provides the fuzzing engine.
-# libfuzzer.a
+# RLC's adapter is separate from LLVM's libFuzzer/ASan runtime.
 find_file(FUZZ_ADAPTER NAMES libfuzzer.a
     PATHS "${CONDA_LIB}" NO_DEFAULT_PATH REQUIRED)
 
-# LLVM 22 needs the SDK path to link on macOS.
-# Stop configuration if the command fails or returns an empty path.
-# During configuration, run xcrun --sdk macosx --show-sdk-path.
-# OUTPUT_VARIABLE stores the command's standard output.
-# OUTPUT_STRIP_TRAILING_WHITESPACE removes trailing newlines and spaces.
-# RESULT_VARIABLE stores the command's exit status.
-execute_process(
-    COMMAND xcrun --sdk macosx --show-sdk-path
-    OUTPUT_VARIABLE MACOS_SDK
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    RESULT_VARIABLE SDK_RESULT
-)
-if(NOT "${SDK_RESULT}" STREQUAL "0" OR MACOS_SDK STREQUAL "")
-    message(FATAL_ERROR "macOS SDK not found. Check xcrun and Xcode Command Line Tools.")
+# Check the external LLVM tools, not RLC's separately bundled LLVM backend.
+function(check_llvm_version tool)
+    execute_process(COMMAND "${${tool}}" --version
+        OUTPUT_VARIABLE version_output ERROR_VARIABLE version_error
+        RESULT_VARIABLE version_result)
+    if(NOT "${version_result}" STREQUAL "0")
+        message(FATAL_ERROR "Cannot run ${tool}: ${${tool}}\n${version_error}")
+    endif()
+    string(REGEX MATCH "[Vv]ersion[ \t]+([0-9]+\\.[0-9]+\\.[0-9]+)"
+        version_match "${version_output}")
+    if(NOT CMAKE_MATCH_1 STREQUAL "22.1.8")
+        message(FATAL_ERROR
+            "${tool} must be LLVM 22.1.8, as pinned in environment.yml.\n${version_output}")
+    endif()
+    message(STATUS "${tool}: ${${tool}} (LLVM ${CMAKE_MATCH_1})")
+endfunction()
+check_llvm_version(CLANG)
+check_llvm_version(LLVM_OPT)
+check_llvm_version(SYMBOLIZER)
+
+execute_process(COMMAND "${CLANG}" -dumpmachine
+    OUTPUT_VARIABLE CLANG_TARGET OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_VARIABLE target_error RESULT_VARIABLE target_result)
+if(NOT "${target_result}" STREQUAL "0" OR
+   NOT CLANG_TARGET MATCHES "^x86_64-.*linux")
+    message(FATAL_ERROR "Expected a Linux x86_64 Clang target; got '${CLANG_TARGET}'.\n${target_error}")
 endif()
+message(STATUS "Clang target: ${CLANG_TARGET}")
+message(STATUS "RLC: ${RLC}")
+message(STATUS "RLC test runner: ${RLC_TEST}")
+message(STATUS "RLC trace runner: ${RLC_ACTION}")
+message(STATUS "RLC fuzzer adapter: ${FUZZ_ADAPTER}")
 
 # ==========================================================
-# 2. Store executables in result/ and intermediate files in build_cmake/temp/.
+# 2. Keep all generated files inside the selected build directory.
 # ==========================================================
 # CMake provides the following directory variables.
-# CMAKE_CURRENT_SOURCE_DIR points to the Kuhn_Poker/ source directory.
-# CMAKE_CURRENT_BINARY_DIR points to the Kuhn_Poker/build_cmake/ build directory.
+# CMAKE_CURRENT_SOURCE_DIR points to the project source directory.
+# CMAKE_CURRENT_BINARY_DIR points to the selected build directory.
 set(SRC "${CMAKE_CURRENT_SOURCE_DIR}")
 set(BUILD "${CMAKE_CURRENT_BINARY_DIR}")
 
-set(RESULT_DIR "${SRC}/result")
+set(RESULT_DIR "${BUILD}/result")
 set(TEMP_DIR "${BUILD}/temp")
 set(FUZZ_TEMP "${TEMP_DIR}/fuzzer")
 set(TEST_TEMP "${TEMP_DIR}/test")
@@ -96,16 +120,25 @@ set(TEST_SOURCE "${SRC}/kuhn_poker_test.rl")
 set(FUZZ_SOURCE "${SRC}/kuhn_poker_fuzz.rl")
 set(HELPER "${SRC}/cmake/kuhn_poker_game.cmake")
 
-# Final executables go in result/ next to the .rl source files.
+# Final executables belong to this build, never to a copied source tree.
 set(GAME_BIN "${RESULT_DIR}/kuhn_poker")
 set(FUZZ_BIN "${RESULT_DIR}/kuhn_poker_fuzzer")
 
+# Python CLI tools also compile/link through RLC. A launcher selects the same
+# Clang for them without the CLI's space-splitting --extra-rlc-args option.
+string(REPLACE "'" "'\\''" RLC_SHELL "${RLC}")
+string(REPLACE "'" "'\\''" CLANG_SHELL "${CLANG}")
+set(RLC_DRIVER "${BUILD}/rlc-with-clang")
+file(WRITE "${RLC_DRIVER}"
+    "#!/bin/sh\nexec '${RLC_SHELL}' '--clang=${CLANG_SHELL}' \"$@\"\n")
+file(CHMOD "${RLC_DRIVER}" PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
+
 # ==========================================================
-# 3. Build the game executable from kuhn_poker_main.rl into result/kuhn_poker.
+# 3. Build the game executable into the build directory's result/ folder.
 # ==========================================================
-# Equivalent to running rlc kuhn_poker_main.rl -g -o result/kuhn_poker.
+# Use the selected Clang when RLC links the native Linux executable.
 # Define how to generate a specific output file.
-# OUTPUT is the file to generate, result/kuhn_poker.
+# OUTPUT is the executable in the build directory's result/ folder.
 # COMMAND is the command to execute.
 # DEPENDS lists the inputs so Ninja rebuilds the executable when source files change.
 # Ninja can usually reuse an existing output when its inputs are unchanged.
@@ -115,8 +148,8 @@ set(FUZZ_BIN "${RESULT_DIR}/kuhn_poker_fuzzer")
 # VERBATIM is CMake's recommended way to handle escaping and quoting in custom commands.
 add_custom_command(
     OUTPUT "${GAME_BIN}"
-    COMMAND "${RLC}" "${GAME_MAIN_SOURCE}" -g -o "${GAME_BIN}"
-    DEPENDS "${GAME_MAIN_SOURCE}" "${GAME_SOURCE}"
+    COMMAND "${RLC}" "${GAME_MAIN_SOURCE}" "--clang=${CLANG}" -g -o "${GAME_BIN}"
+    DEPENDS "${GAME_MAIN_SOURCE}" "${GAME_SOURCE}" "${RLC}" "${CLANG}"
     WORKING_DIRECTORY "${SRC}"
     COMMENT "Building the Kuhn Poker game executable"
     VERBATIM
@@ -162,7 +195,7 @@ add_custom_command(
 
     # Step 4. Link the LLVM libFuzzer runtime and RLC adapter library.
     COMMAND "${CLANG}"
-        -g -isysroot "${MACOS_SDK}"
+        -g
         -fsanitize=fuzzer,address
         "${ASAN_OBJ}" "${FUZZ_ADAPTER}"
         -o "${FUZZ_BIN}"
@@ -170,6 +203,7 @@ add_custom_command(
     # DEPENDS triggers a fuzzer rebuild when the game, fuzzer entry point, or helper changes.
     # BYPRODUCTS lists the three intermediate files generated alongside kuhn_poker_fuzzer.
     DEPENDS "${GAME_SOURCE}" "${FUZZ_SOURCE}" "${HELPER}"
+        "${RLC}" "${LLVM_OPT}" "${CLANG}" "${FUZZ_ADAPTER}"
     BYPRODUCTS "${RAW_IR}" "${ASAN_IR}" "${ASAN_OBJ}"
     WORKING_DIRECTORY "${SRC}"
     COMMENT "Building the RLC fuzzer with ASan instrumentation"
@@ -188,6 +222,7 @@ add_test(NAME unit_test
     COMMAND "${CMAKE_COMMAND}"
         "-DMODE=unit"
         "-DRLC_TEST=${RLC_TEST}"
+        "-DRLC=${RLC_DRIVER}"
         "-DSOURCE=${TEST_SOURCE}"
         "-DSOURCE_DIR=${SRC}"
         "-DOUTPUT=${TEST_TEMP}/unit_test.log"
@@ -222,7 +257,7 @@ add_test(NAME trace_test
     COMMAND "${CMAKE_COMMAND}"
         "-DMODE=trace"
         "-DRLC_ACTION=${RLC_ACTION}"
-        "-DRLC=${RLC}"
+        "-DRLC=${RLC_DRIVER}"
         "-DSOURCE=${GAME_SOURCE}"
         "-DSOURCE_DIR=${SRC}"
         "-DTRACE_FILE=${SRC}/traces/game1.txt"

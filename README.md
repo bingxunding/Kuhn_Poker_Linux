@@ -5,10 +5,10 @@ ENGLISH VERSION
 Kuhn Poker implemented in Rulebook, using CMake to build the game example and a libFuzzer program with AddressSanitizer (ASan), and CTest to run tests automatically, including trace-based testing with `rlc-action`.
 
 ## Build and Test
-Run the following commands in the `Kuhn_Poker` directory. For first-time setup, complete [Environment Setup](#environment-setup) below first.
+Run the following commands in the `Kuhn_Poker_Linux` directory. For first-time setup, complete [Environment Setup](#environment-setup) below first.
 
 ```sh
-conda activate rulebook
+conda activate rulebook_linux
 cmake -S . -B build_cmake -G Ninja
 cmake --build build_cmake
 ctest --test-dir build_cmake --output-on-failure
@@ -21,22 +21,18 @@ cmake --build build_cmake --target verify_all
 Successful execution displays `100% tests passed` out of 5 tests. CTest does not build programs automatically, so run Build before Test after changing the source; `verify_all` performs both in sequence.
 
 ## Environment Setup
-The current setup supports **Apple Silicon macOS (native arm64)** and requires Git, Conda, and the macOS SDK. Install Conda by following the [official Miniforge instructions](https://github.com/conda-forge/miniforge). If neither Xcode nor Command Line Tools is installed, run the following command and wait for the system installation to finish:
-```sh
-xcode-select --install
-```
+The target is **Linux x86_64 with glibc 2.28 or newer**, using a native Conda toolchain. The pinned `rl-language-core==0.4.18` release provides a [Linux x86_64 wheel](https://pypi.org/project/rl-language-core/0.4.18/#files). Use the Linux x86_64 installer from the [official Miniforge instructions](https://github.com/conda-forge/miniforge). The Conda toolchain pins the Linux sysroot to glibc 2.28; the RLC wheel alone has a lower minimum of glibc 2.17. Any additional system development packages depend on the Linux distribution.
 
-Clone the repository, enter the project subdirectory, and create the environment:
+Copy or check out this project's source files on the Linux server, enter the project directory, and create the environment:
 ```sh
-git clone https://github.com/bingxunding/rulebook_project.git
-cd rulebook_project/Kuhn_Poker
+cd /path/to/Kuhn_Poker_Linux
 conda env create --file environment.yml
-conda activate rulebook
+conda activate rulebook_linux
 ```
 
-If you already have a `rulebook` environment that meets the requirements, activate it without creating it again. Then run the build and test commands above.
-[environment.yml](environment.yml) pins the key dependencies: Python 3.11, `rl-language-core` 0.4.18, external Clang/LLVM 22.1.8, CMake 4.4.3, Ninja 1.13.2, and zstd 1.5.7. RLC's bundled backend uses LLVM 21.1.3; CMake locates external tools in the active Conda environment.
-Building and testing have been verified in an existing environment with these versions. The environment file is not a complete lock file, and a fresh Conda environment was not recreated for this verification.
+Use a new Linux environment rather than copying an existing environment from another machine. [environment.yml](environment.yml) defines Python 3.11, `rl-language-core` 0.4.18, external Clang/LLVM 22.1.8, and the build and Python dependencies. RLC ships its own compiler backend; CMake selects the external LLVM tools from the active Conda environment. The environment file specifies key dependency versions and is not a complete lock file.
+
+Transfer source files and trace data only. Create a fresh `build_cmake/` on Linux and do not reuse another platform's CMake cache, object files, LLVM IR, or executables. Outputs are stored in `build_cmake/result/`, keeping them separate from the source files. The Linux migration has not yet been verified by running the five tests on a Linux x86_64 host; run `verify_all` there before treating the migration as validated.
 
 ## Test Coverage
 CTest registers 5 tests, with `unit_test` running 10 unit test functions internally.
@@ -84,10 +80,10 @@ Run the trace test separately, or replay the trace manually:
 
 ```sh
 ctest --test-dir build_cmake -R '^trace_test$' -V
-rlc-action kuhn_poker.rl traces/game1.txt
+rlc-action kuhn_poker.rl traces/game1.txt --rlc "${PWD}/build_cmake/rlc-with-clang"
 ```
 
-The CMake helper runs `rlc-action` with the selected RLC compiler, captures the output and exit status, checks for execution and known action errors, and compares the final serialized state with the expected state file. It writes the output to `build_cmake/temp/test/trace_test.log`.
+Run the manual commands after CMake configuration, which creates `build_cmake/rlc-with-clang` to select the same Conda Clang for all builds. The CMake helper runs `rlc-action` with the selected RLC compiler, captures the output and exit status, checks for execution and known action errors, and compares the final serialized state with the expected state file. It writes the output to `build_cmake/temp/test/trace_test.log`.
 
 A successful replay alone is not sufficient: the final state must also match the expected result. The comparison uses exact text after trimming leading and trailing whitespace, so the expected state must remain on one line with matching field order and formatting.
 
@@ -95,22 +91,22 @@ A successful replay alone is not sufficient: the final state must also match the
 `rlc-random` can generate a candidate game trace for inspection:
 
 ```sh
-rlc-random kuhn_poker.rl -o traces/candidate.txt
-rlc-action kuhn_poker.rl traces/candidate.txt
+rlc-random kuhn_poker.rl -o traces/candidate.txt --rlc "${PWD}/build_cmake/rlc-with-clang"
+rlc-action kuhn_poker.rl traces/candidate.txt --rlc "${PWD}/build_cmake/rlc-with-clang"
 ```
 
-The `deal` action uses the enumerable `CardNumber` enum (J, Q, K), allowing `rlc-random` to enumerate its arguments. The unit tests use the same action parameter type. Warnings about non-tensorable `Int` state fields concern machine-learning tensor conversion and do not prevent the trace replay tested here.
+The `deal` action uses the enumerable `CardNumber` enum (J, Q, K), allowing `rlc-random` to enumerate its arguments. The unit tests use the same action parameter type. Warnings about non-tensorable `Int` state fields concern machine-learning tensor conversion; the trace test still requires successful execution and an exact final-state match.
 
 Random traces are candidates, not independent correctness oracles: check their legality and expected results against the game rules before using them as regression tests. The registered `trace_test` replays the saved `game1.txt` rather than generating a new random trace each time.
 
 ### Verification Results
-All five CTest tests passed through `verify_all` in the existing local environment. The trace test also passed independently. A negative check was performed by temporarily changing the expected winner from `0` to `1`; the trace test correctly failed with an `Unexpected final state` error. Restore the expected winner to `0` after such a check.
+Linux x86_64 execution has not yet been verified for this migration. On the Linux server, run `verify_all` and confirm that all five CTest tests pass. Check `unit_test.log` for the ten intended test functions and `trace_test.log` for the replay output and final-state comparison. A successful CMake configuration alone does not confirm that compilation or tests pass.
 
 The current trace test covers one fixed bet-and-fold scenario and compares the final state. It complements the unit tests, sanitizer, and fuzzer but does not prove that every game rule or intermediate state is correct.
 
 ## Run the Game Example
 ```sh
-./result/kuhn_poker
+./build_cmake/result/kuhn_poker
 echo "退出码：$?"
 ```
 
@@ -122,6 +118,7 @@ The example has no interactive interface or printed output; exit code `0` indica
 | `kuhn_poker_main.rl` | Entry point for the normal program; imports the game rules and runs a fixed example |
 | `kuhn_poker_test.rl` | Rule unit tests and action legality checks |
 | `kuhn_poker_fuzz.rl` | Parses fuzz inputs and executes legal actions |
+| `environment.yml` | Linux x86_64 Conda environment and Python dependencies |
 | `CMakeLists.txt` | Tool discovery, build rules, and test registration |
 | `cmake/kuhn_poker_game.cmake` | Generates IR, runs unit and trace tests, compares trace results, and saves logs |
 | `traces/game1.txt` | Fixed game action sequence for trace replay |
@@ -130,8 +127,8 @@ The example has no interactive interface or printed output; exit code `0` indica
 ## Outputs and Logs
 | Path | Description |
 | --- | --- |
-| `result/kuhn_poker` | Normal game example |
-| `result/kuhn_poker_fuzzer` | Fuzzer with ASan |
+| `build_cmake/result/kuhn_poker` | Normal game example |
+| `build_cmake/result/kuhn_poker_fuzzer` | Fuzzer with ASan |
 | `build_cmake/temp/test/unit_test.log` | Unit test results |
 | `build_cmake/temp/test/trace_test.log` | Trace replay output and diagnostics |
 | `build_cmake/Testing/Temporary/LastTest.log` | Detailed output from the most recent CTest run |
@@ -146,10 +143,10 @@ CHINESE VERSION
 使用 Rulebook 实现 Kuhn Poker，以 CMake 构建游戏示例和带 AddressSanitizer（ASan）的 libFuzzer 程序，通过 CTest 自动运行测试，包括使用 `rlc-action` 的基于轨迹的测试。
 
 ## 构建与测试
-在 `Kuhn_Poker` 目录执行以下命令。首次使用请先完成下方的[环境安装](#环境安装)。
+在 `Kuhn_Poker_Linux` 目录执行以下命令。首次使用请先完成下方的[环境安装](#环境安装)。
 
 ```sh
-conda activate rulebook
+conda activate rulebook_linux
 cmake -S . -B build_cmake -G Ninja
 cmake --build build_cmake
 ctest --test-dir build_cmake --output-on-failure
@@ -162,22 +159,18 @@ cmake --build build_cmake --target verify_all
 成功时显示 5 项测试全部通过（`100% tests passed`）。CTest 不会自动构建程序，修改源码后应先 Build 再 Test；`verify_all` 会依次完成两者。
 
 ## 环境安装
-当前方案适用于 **Apple Silicon macOS（原生 arm64）**，需要 Git、Conda 和 macOS SDK。Conda 可按 [Miniforge 官方说明](https://github.com/conda-forge/miniforge)安装；尚未安装 Xcode 或 Command Line Tools 时，执行以下命令并等待系统安装完成：
-```sh
-xcode-select --install
-```
+目标环境为 **Linux x86_64，glibc 2.28 或更新版本**，使用原生 Conda 工具链。固定的 `rl-language-core==0.4.18` 发布了 [Linux x86_64 预编译包](https://pypi.org/project/rl-language-core/0.4.18/#files)。Conda 请按 [Miniforge 官方说明](https://github.com/conda-forge/miniforge)选择 Linux x86_64 安装包。Conda 工具链固定 Linux sysroot 为 glibc 2.28；RLC 预编译包本身的最低要求为 glibc 2.17。其他系统开发包要求随 Linux 发行版而异。
 
-克隆仓库，进入项目子目录并创建环境：
+将本项目源码复制或检出到 Linux 服务器，进入项目目录并创建环境：
 ```sh
-git clone https://github.com/bingxunding/rulebook_project.git
-cd rulebook_project/Kuhn_Poker
+cd /path/to/Kuhn_Poker_Linux
 conda env create --file environment.yml
-conda activate rulebook
+conda activate rulebook_linux
 ```
 
-已有符合要求的 `rulebook` 环境时，直接激活即可，无需重复创建。随后执行上方的构建与测试命令。
-[environment.yml](environment.yml)固定关键依赖：Python 3.11、`rl-language-core` 0.4.18、外部 Clang/LLVM 22.1.8、CMake 4.4.3、Ninja 1.13.2 和 zstd 1.5.7。RLC 自带后端为 LLVM 21.1.3；CMake 从当前 Conda 环境查找外部工具。
-构建与测试已在上述版本的现有环境中验证；环境文件不是完整锁文件，本次未重新创建全新 Conda 环境。
+请在 Linux 上新建环境，不要复制其他机器上的现有环境。[environment.yml](environment.yml)定义 Python 3.11、`rl-language-core` 0.4.18、外部 Clang/LLVM 22.1.8，以及构建和 Python 依赖。RLC 自带编译后端；CMake 从激活的 Conda 环境选择外部 LLVM 工具。环境文件固定关键依赖版本，但不是完整锁文件。
+
+迁移时仅传输源码和轨迹数据。在 Linux 上创建全新的 `build_cmake/`，不要复用其他平台的 CMake 缓存、对象文件、LLVM IR 或可执行文件。输出位于 `build_cmake/result/`，与源码分开保存。本次迁移尚未在 Linux x86_64 主机上运行全部五项测试；应在服务器执行 `verify_all` 后确认迁移结果。
 
 ## 测试内容
 CTest 共注册 5 项测试，其中 `unit_test` 内部运行 10 个单元测试函数。
@@ -225,10 +218,10 @@ Player 0 获得 J，Player 1 获得 Q。Player 0 下注 1 筹码，Player 1 弃�
 
 ```sh
 ctest --test-dir build_cmake -R '^trace_test$' -V
-rlc-action kuhn_poker.rl traces/game1.txt
+rlc-action kuhn_poker.rl traces/game1.txt --rlc "${PWD}/build_cmake/rlc-with-clang"
 ```
 
-CMake 辅助脚本使用指定的 RLC 编译器运行 `rlc-action`，捕获输出和退出状态，检查执行错误及已知的动作错误，并将最终序列化状态与预期状态文件进行比较。执行输出保存到 `build_cmake/temp/test/trace_test.log`。
+手动命令应在 CMake 配置后运行；配置会生成 `build_cmake/rlc-with-clang`，确保各构建步骤使用同一个 Conda Clang。CMake 辅助脚本使用指定的 RLC 编译器运行 `rlc-action`，捕获输出和退出状态，检查执行错误及已知的动作错误，并将最终序列化状态与预期状态文件进行比较。执行输出保存到 `build_cmake/temp/test/trace_test.log`。
 
 仅成功重放动作并不足以通过测试，最终状态还必须与预期结果一致。当前采用去除首尾空白后的精确文本比较，因此预期状态必须保存在一行，且字段顺序与格式需要一致。
 
@@ -236,22 +229,22 @@ CMake 辅助脚本使用指定的 RLC 编译器运行 `rlc-action`，捕获输�
 `rlc-random` 可以生成候选游戏轨迹供检查：
 
 ```sh
-rlc-random kuhn_poker.rl -o traces/candidate.txt
-rlc-action kuhn_poker.rl traces/candidate.txt
+rlc-random kuhn_poker.rl -o traces/candidate.txt --rlc "${PWD}/build_cmake/rlc-with-clang"
+rlc-action kuhn_poker.rl traces/candidate.txt --rlc "${PWD}/build_cmake/rlc-with-clang"
 ```
 
-`deal` 动作使用可枚举的 `CardNumber` 枚举类型（J、Q、K），使 `rlc-random` 可以枚举发牌参数。单元测试也使用相同的动作参数类型。普通 `Int` 状态字段不可张量化的警告涉及机器学习的张量转换，不影响本次已验证的轨迹重放。
+`deal` 动作使用可枚举的 `CardNumber` 枚举类型（J、Q、K），使 `rlc-random` 可以枚举发牌参数。单元测试也使用相同的动作参数类型。普通 `Int` 状态字段不可张量化的警告涉及机器学习的张量转换；轨迹测试仍要求执行成功且最终状态完全匹配。
 
 随机生成的轨迹只是候选测试数据，并非独立的正确性判断依据。应根据游戏规则核对其合法性和预期结果，再将其用于回归测试。已注册的 `trace_test` 每次重放保存好的 `game1.txt`，而不是重新随机生成轨迹。
 
 ### 验证结果
-现有本地环境中，`verify_all` 的 5 项 CTest 测试均已通过，`trace_test` 单独运行也已通过。反向验证时，暂时将预期胜者从 `0` 改为 `1`，轨迹测试正确失败并报告 `Unexpected final state`。完成此类检查后，应将预期胜者恢复为 `0`。
+本次迁移尚未在 Linux x86_64 上完成运行验证。请在 Linux 服务器执行 `verify_all`，确认五项 CTest 测试全部通过，并检查 `unit_test.log` 中是否运行了预期的十个单测函数，以及 `trace_test.log` 中的重放输出与最终状态比较。仅 CMake 配置成功不能证明编译或测试通过。
 
 当前轨迹测试覆盖一条固定的下注、弃牌流程，并比较最终状态。它与单元测试、Sanitizer 和 Fuzzer 互相补充，但不能证明所有游戏规则和中间状态都正确。
 
 ## 运行游戏示例
 ```sh
-./result/kuhn_poker
+./build_cmake/result/kuhn_poker
 echo "退出码：$?"
 ```
 
@@ -263,6 +256,7 @@ echo "退出码：$?"
 | `kuhn_poker_main.rl` | 普通程序入口，导入游戏规则并运行固定案例 |
 | `kuhn_poker_test.rl` | 规则单测及动作合法性检查 |
 | `kuhn_poker_fuzz.rl` | 解析 fuzz 输入并执行合法动作 |
+| `environment.yml` | Linux x86_64 Conda 环境和 Python 依赖 |
 | `CMakeLists.txt` | 工具查找、构建规则和测试注册 |
 | `cmake/kuhn_poker_game.cmake` | 生成 IR、执行单测和轨迹测试、比较轨迹结果并保存日志 |
 | `traces/game1.txt` | 用于重放的固定游戏动作序列 |
@@ -271,8 +265,8 @@ echo "退出码：$?"
 ## 输出与日志
 | 路径 | 内容 |
 | --- | --- |
-| `result/kuhn_poker` | 普通游戏示例 |
-| `result/kuhn_poker_fuzzer` | 带 ASan 的 fuzzer |
+| `build_cmake/result/kuhn_poker` | 普通游戏示例 |
+| `build_cmake/result/kuhn_poker_fuzzer` | 带 ASan 的 fuzzer |
 | `build_cmake/temp/test/unit_test.log` | 单元测试结果 |
 | `build_cmake/temp/test/trace_test.log` | 轨迹重放输出及诊断信息 |
 | `build_cmake/Testing/Temporary/LastTest.log` | 最近一次 CTest 的详细输出 |

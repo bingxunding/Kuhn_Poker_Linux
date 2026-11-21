@@ -2,6 +2,7 @@
 # The build invokes this helper with cmake -P.
 # MODE=ir   : Generate LLVM IR using RLC's built-in fuzzer mode.
 # MODE=unit : Run the RLC unit tests and save their output.
+# MODE=trace: Replay the fixed action trace and compare the final state.
 
 if(NOT DEFINED MODE)
     message(FATAL_ERROR "Missing MODE argument")
@@ -45,7 +46,7 @@ elseif(MODE STREQUAL "unit")
     # TEST_STDERR captures standard error.
     # TEST_RESULT captures the exit status.
     execute_process(
-        COMMAND "${RLC_TEST}" "${SOURCE}"
+        COMMAND "${RLC_TEST}" "${SOURCE}" --rlc "${RLC}"
         WORKING_DIRECTORY "${SOURCE_DIR}"
         OUTPUT_VARIABLE TEST_STDOUT
         ERROR_VARIABLE TEST_STDERR
