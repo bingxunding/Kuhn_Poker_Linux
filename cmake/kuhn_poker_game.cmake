@@ -8,6 +8,11 @@ if(NOT DEFINED MODE)
     message(FATAL_ERROR "Missing MODE argument")
 endif()
 
+if((MODE STREQUAL "unit" OR MODE STREQUAL "trace") AND
+   NOT EXISTS "${RLC_STDLIB}/learn.rl")
+    message(FATAL_ERROR "RLC standard library not found: ${RLC_STDLIB}/learn.rl. Reconfigure with the active Conda environment.")
+endif()
+
 if(MODE STREQUAL "ir")
     # Write RLC's --ir output directly to the specified file in place of shell redirection.
     # MODE=ir generates LLVM IR.
@@ -47,6 +52,7 @@ elseif(MODE STREQUAL "unit")
     # TEST_RESULT captures the exit status.
     execute_process(
         COMMAND "${RLC_TEST}" "${SOURCE}" --rlc "${RLC}"
+            --stdlib "${RLC_STDLIB}"
         WORKING_DIRECTORY "${SOURCE_DIR}"
         OUTPUT_VARIABLE TEST_STDOUT
         ERROR_VARIABLE TEST_STDERR
@@ -71,6 +77,7 @@ elseif(MODE STREQUAL "trace")
     execute_process(
         COMMAND "${RLC_ACTION}" "${SOURCE}" "${TRACE_FILE}"
             --rlc "${RLC}"
+            --stdlib "${RLC_STDLIB}"
         WORKING_DIRECTORY "${SOURCE_DIR}"
         OUTPUT_VARIABLE TRACE_STDOUT
         ERROR_VARIABLE TRACE_STDERR

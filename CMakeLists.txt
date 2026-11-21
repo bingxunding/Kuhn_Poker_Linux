@@ -38,6 +38,15 @@ find_program(RLC_TEST NAMES rlc-test
 find_program(RLC_ACTION NAMES rlc-action
     PATHS "${CONDA_BIN}" NO_DEFAULT_PATH REQUIRED)
 
+# Python tools otherwise infer this from --rlc, which points to our build-local
+# launcher rather than the installed compiler. Trace replay needs learn.rl.
+get_filename_component(RLC_REAL "${RLC}" REALPATH)
+get_filename_component(RLC_BIN_DIR "${RLC_REAL}" DIRECTORY)
+get_filename_component(RLC_PREFIX "${RLC_BIN_DIR}" DIRECTORY)
+find_path(RLC_STDLIB NAMES learn.rl
+    PATHS "${RLC_PREFIX}/lib/rlc/stdlib" "${CONDA_LIB}/rlc/stdlib"
+    NO_DEFAULT_PATH REQUIRED)
+
 # Prefer Conda's target driver, which selects its Linux sysroot and linker.
 find_program(CLANG NAMES x86_64-conda-linux-gnu-clang clang-22 clang
     PATHS "${CONDA_BIN}" NO_DEFAULT_PATH REQUIRED)
@@ -85,6 +94,7 @@ message(STATUS "Clang target: ${CLANG_TARGET}")
 message(STATUS "RLC: ${RLC}")
 message(STATUS "RLC test runner: ${RLC_TEST}")
 message(STATUS "RLC trace runner: ${RLC_ACTION}")
+message(STATUS "RLC standard library: ${RLC_STDLIB}")
 message(STATUS "RLC fuzzer adapter: ${FUZZ_ADAPTER}")
 
 # ==========================================================
@@ -223,6 +233,7 @@ add_test(NAME unit_test
         "-DMODE=unit"
         "-DRLC_TEST=${RLC_TEST}"
         "-DRLC=${RLC_DRIVER}"
+        "-DRLC_STDLIB=${RLC_STDLIB}"
         "-DSOURCE=${TEST_SOURCE}"
         "-DSOURCE_DIR=${SRC}"
         "-DOUTPUT=${TEST_TEMP}/unit_test.log"
@@ -258,6 +269,7 @@ add_test(NAME trace_test
         "-DMODE=trace"
         "-DRLC_ACTION=${RLC_ACTION}"
         "-DRLC=${RLC_DRIVER}"
+        "-DRLC_STDLIB=${RLC_STDLIB}"
         "-DSOURCE=${GAME_SOURCE}"
         "-DSOURCE_DIR=${SRC}"
         "-DTRACE_FILE=${SRC}/traces/game1.txt"

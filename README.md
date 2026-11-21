@@ -32,7 +32,7 @@ conda activate rulebook_linux
 
 Use a new Linux environment rather than copying an existing environment from another machine. [environment.yml](environment.yml) defines Python 3.11, `rl-language-core` 0.4.18, external Clang/LLVM 22.1.8, and the build and Python dependencies. RLC ships its own compiler backend; CMake selects the external LLVM tools from the active Conda environment. The environment file specifies key dependency versions and is not a complete lock file.
 
-Transfer source files and trace data only. Create a fresh `build_cmake/` on Linux and do not reuse another platform's CMake cache, object files, LLVM IR, or executables. Outputs are stored in `build_cmake/result/`, keeping them separate from the source files. The Linux migration has not yet been verified by running the five tests on a Linux x86_64 host; run `verify_all` there before treating the migration as validated.
+Transfer source files and trace data only. Create a fresh `build_cmake/` on Linux and do not reuse another platform's CMake cache, object files, LLVM IR, or executables. Outputs are stored in `build_cmake/result/`, keeping them separate from the source files. A reported Linux x86_64 run passed the first four tests; trace replay exposed a standard-library lookup issue. This revision fixes that lookup; rerun `verify_all` on Linux to validate all five tests.
 
 ## Test Coverage
 CTest registers 5 tests, with `unit_test` running 10 unit test functions internally.
@@ -80,10 +80,10 @@ Run the trace test separately, or replay the trace manually:
 
 ```sh
 ctest --test-dir build_cmake -R '^trace_test$' -V
-rlc-action kuhn_poker.rl traces/game1.txt --rlc "${PWD}/build_cmake/rlc-with-clang"
+rlc-action kuhn_poker.rl traces/game1.txt --rlc "${PWD}/build_cmake/rlc-with-clang" --stdlib "${CONDA_PREFIX}/lib/rlc/stdlib"
 ```
 
-Run the manual commands after CMake configuration, which creates `build_cmake/rlc-with-clang` to select the same Conda Clang for all builds. The CMake helper runs `rlc-action` with the selected RLC compiler, captures the output and exit status, checks for execution and known action errors, and compares the final serialized state with the expected state file. It writes the output to `build_cmake/temp/test/trace_test.log`.
+Run the manual commands after CMake configuration, which creates `build_cmake/rlc-with-clang` to select the same Conda Clang for all builds. Pass `--stdlib` explicitly because Python tools otherwise infer the standard-library location from the launcher path. CMake discovers `RLC_STDLIB` from the installed compiler or active Conda environment and passes it to unit and trace tests; it can be overridden with `-DRLC_STDLIB=/path/to/stdlib`. The CMake helper runs `rlc-action` with the selected RLC compiler, captures the output and exit status, checks for execution and known action errors, and compares the final serialized state with the expected state file. It writes the output to `build_cmake/temp/test/trace_test.log`.
 
 A successful replay alone is not sufficient: the final state must also match the expected result. The comparison uses exact text after trimming leading and trailing whitespace, so the expected state must remain on one line with matching field order and formatting.
 
@@ -91,8 +91,8 @@ A successful replay alone is not sufficient: the final state must also match the
 `rlc-random` can generate a candidate game trace for inspection:
 
 ```sh
-rlc-random kuhn_poker.rl -o traces/candidate.txt --rlc "${PWD}/build_cmake/rlc-with-clang"
-rlc-action kuhn_poker.rl traces/candidate.txt --rlc "${PWD}/build_cmake/rlc-with-clang"
+rlc-random kuhn_poker.rl -o traces/candidate.txt --rlc "${PWD}/build_cmake/rlc-with-clang" --stdlib "${CONDA_PREFIX}/lib/rlc/stdlib"
+rlc-action kuhn_poker.rl traces/candidate.txt --rlc "${PWD}/build_cmake/rlc-with-clang" --stdlib "${CONDA_PREFIX}/lib/rlc/stdlib"
 ```
 
 The `deal` action uses the enumerable `CardNumber` enum (J, Q, K), allowing `rlc-random` to enumerate its arguments. The unit tests use the same action parameter type. Warnings about non-tensorable `Int` state fields concern machine-learning tensor conversion; the trace test still requires successful execution and an exact final-state match.
@@ -100,7 +100,7 @@ The `deal` action uses the enumerable `CardNumber` enum (J, Q, K), allowing `rlc
 Random traces are candidates, not independent correctness oracles: check their legality and expected results against the game rules before using them as regression tests. The registered `trace_test` replays the saved `game1.txt` rather than generating a new random trace each time.
 
 ### Verification Results
-Linux x86_64 execution has not yet been verified for this migration. On the Linux server, run `verify_all` and confirm that all five CTest tests pass. Check `unit_test.log` for the ten intended test functions and `trace_test.log` for the replay output and final-state comparison. A successful CMake configuration alone does not confirm that compilation or tests pass.
+A reported Linux x86_64 run passed `game_test`, `unit_test`, `sanitizer_test`, and `fuzzer_test`. `trace_test` failed because Python inferred `<project>/lib/rlc/stdlib/learn.rl` from the build-local launcher. This revision supplies the installed standard library explicitly. On the Linux server, rerun `verify_all` and confirm that all five CTest tests pass. Check `unit_test.log` for the ten intended test functions and `trace_test.log` for the replay output and final-state comparison. A successful CMake configuration alone does not confirm that compilation or tests pass.
 
 The current trace test covers one fixed bet-and-fold scenario and compares the final state. It complements the unit tests, sanitizer, and fuzzer but does not prove that every game rule or intermediate state is correct.
 
@@ -170,7 +170,7 @@ conda activate rulebook_linux
 
 请在 Linux 上新建环境，不要复制其他机器上的现有环境。[environment.yml](environment.yml)定义 Python 3.11、`rl-language-core` 0.4.18、外部 Clang/LLVM 22.1.8，以及构建和 Python 依赖。RLC 自带编译后端；CMake 从激活的 Conda 环境选择外部 LLVM 工具。环境文件固定关键依赖版本，但不是完整锁文件。
 
-迁移时仅传输源码和轨迹数据。在 Linux 上创建全新的 `build_cmake/`，不要复用其他平台的 CMake 缓存、对象文件、LLVM IR 或可执行文件。输出位于 `build_cmake/result/`，与源码分开保存。本次迁移尚未在 Linux x86_64 主机上运行全部五项测试；应在服务器执行 `verify_all` 后确认迁移结果。
+迁移时仅传输源码和轨迹数据。在 Linux 上创建全新的 `build_cmake/`，不要复用其他平台的 CMake 缓存、对象文件、LLVM IR 或可执行文件。输出位于 `build_cmake/result/`，与源码分开保存。已收到 Linux x86_64 上前四项测试通过的日志，trace 重放暴露了标准库定位问题。本版本修正该路径；应在服务器重新执行 `verify_all`，确认五项测试全部通过。
 
 ## 测试内容
 CTest 共注册 5 项测试，其中 `unit_test` 内部运行 10 个单元测试函数。
@@ -218,10 +218,10 @@ Player 0 获得 J，Player 1 获得 Q。Player 0 下注 1 筹码，Player 1 弃�
 
 ```sh
 ctest --test-dir build_cmake -R '^trace_test$' -V
-rlc-action kuhn_poker.rl traces/game1.txt --rlc "${PWD}/build_cmake/rlc-with-clang"
+rlc-action kuhn_poker.rl traces/game1.txt --rlc "${PWD}/build_cmake/rlc-with-clang" --stdlib "${CONDA_PREFIX}/lib/rlc/stdlib"
 ```
 
-手动命令应在 CMake 配置后运行；配置会生成 `build_cmake/rlc-with-clang`，确保各构建步骤使用同一个 Conda Clang。CMake 辅助脚本使用指定的 RLC 编译器运行 `rlc-action`，捕获输出和退出状态，检查执行错误及已知的动作错误，并将最终序列化状态与预期状态文件进行比较。执行输出保存到 `build_cmake/temp/test/trace_test.log`。
+手动命令应在 CMake 配置后运行；配置会生成 `build_cmake/rlc-with-clang`，确保各构建步骤使用同一个 Conda Clang。需要显式传入 `--stdlib`，否则 Python 工具会根据启动器路径错误推导标准库位置。CMake 从实际编译器或激活的 Conda 环境查找 `RLC_STDLIB` 并传给单测与轨迹测试；也可通过 `-DRLC_STDLIB=/path/to/stdlib` 指定。CMake 辅助脚本使用指定的 RLC 编译器运行 `rlc-action`，捕获输出和退出状态，检查执行错误及已知的动作错误，并将最终序列化状态与预期状态文件进行比较。执行输出保存到 `build_cmake/temp/test/trace_test.log`。
 
 仅成功重放动作并不足以通过测试，最终状态还必须与预期结果一致。当前采用去除首尾空白后的精确文本比较，因此预期状态必须保存在一行，且字段顺序与格式需要一致。
 
@@ -229,8 +229,8 @@ rlc-action kuhn_poker.rl traces/game1.txt --rlc "${PWD}/build_cmake/rlc-with-cla
 `rlc-random` 可以生成候选游戏轨迹供检查：
 
 ```sh
-rlc-random kuhn_poker.rl -o traces/candidate.txt --rlc "${PWD}/build_cmake/rlc-with-clang"
-rlc-action kuhn_poker.rl traces/candidate.txt --rlc "${PWD}/build_cmake/rlc-with-clang"
+rlc-random kuhn_poker.rl -o traces/candidate.txt --rlc "${PWD}/build_cmake/rlc-with-clang" --stdlib "${CONDA_PREFIX}/lib/rlc/stdlib"
+rlc-action kuhn_poker.rl traces/candidate.txt --rlc "${PWD}/build_cmake/rlc-with-clang" --stdlib "${CONDA_PREFIX}/lib/rlc/stdlib"
 ```
 
 `deal` 动作使用可枚举的 `CardNumber` 枚举类型（J、Q、K），使 `rlc-random` 可以枚举发牌参数。单元测试也使用相同的动作参数类型。普通 `Int` 状态字段不可张量化的警告涉及机器学习的张量转换；轨迹测试仍要求执行成功且最终状态完全匹配。
@@ -238,7 +238,7 @@ rlc-action kuhn_poker.rl traces/candidate.txt --rlc "${PWD}/build_cmake/rlc-with
 随机生成的轨迹只是候选测试数据，并非独立的正确性判断依据。应根据游戏规则核对其合法性和预期结果，再将其用于回归测试。已注册的 `trace_test` 每次重放保存好的 `game1.txt`，而不是重新随机生成轨迹。
 
 ### 验证结果
-本次迁移尚未在 Linux x86_64 上完成运行验证。请在 Linux 服务器执行 `verify_all`，确认五项 CTest 测试全部通过，并检查 `unit_test.log` 中是否运行了预期的十个单测函数，以及 `trace_test.log` 中的重放输出与最终状态比较。仅 CMake 配置成功不能证明编译或测试通过。
+已收到 Linux x86_64 上 `game_test`、`unit_test`、`sanitizer_test`、`fuzzer_test` 通过的日志。`trace_test` 因 Python 根据构建目录中的启动器错误推导出 `<project>/lib/rlc/stdlib/learn.rl` 而失败。本版本显式指定已安装的标准库。请在 Linux 服务器重新执行 `verify_all`，确认五项 CTest 测试全部通过，并检查 `unit_test.log` 中是否运行了预期的十个单测函数，以及 `trace_test.log` 中的重放输出与最终状态比较。仅 CMake 配置成功不能证明编译或测试通过。
 
 当前轨迹测试覆盖一条固定的下注、弃牌流程，并比较最终状态。它与单元测试、Sanitizer 和 Fuzzer 互相补充，但不能证明所有游戏规则和中间状态都正确。
 
